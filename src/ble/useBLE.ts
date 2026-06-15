@@ -57,7 +57,8 @@ export function useBLE() {
         {allowDuplicates: false},
         async (error, device) => {
           if (error) { setStatus('error'); return; }
-          if (!device || device.name !== DEVICE_NAME) return;
+          const name = device.localName ?? device.name;
+          if (!device || name !== DEVICE_NAME) return;
 
           manager.stopDeviceScan();
           setStatus('connecting');
