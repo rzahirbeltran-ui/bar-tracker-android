@@ -30,8 +30,11 @@ jobs:
       - name: Build release APK
         run: cd android && ./gradlew assembleRelease --no-daemon
 
+      - name: Find APK
+        run: find android/app/build/outputs/apk -name "*.apk" | xargs ls -lh
+
       - uses: actions/upload-artifact@v4
         with:
           name: BarTracker-android
-          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 7
