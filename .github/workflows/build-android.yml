@@ -1,0 +1,37 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build release APK
+        run: cd android && ./gradlew assembleRelease --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BarTracker-android
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 7
