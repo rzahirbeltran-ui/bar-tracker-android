@@ -53,7 +53,7 @@ export function useBLE() {
       setLastSample(null);
 
       manager.startDeviceScan(
-        [NUS_SERVICE_UUID],
+        null,
         {allowDuplicates: false},
         async (error, device) => {
           if (error) { setStatus('error'); return; }
