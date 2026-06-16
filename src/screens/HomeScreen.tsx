@@ -51,6 +51,7 @@ export default function HomeScreen() {
     if (!isConnected) { resetVelocity(); setPeakVel(0); setInstVel(0); }
   }, [isConnected]);
 
+  const packetCount = samples.length;
   const rpe = isConnected && peakVel > 0.05 ? estimateRPE(peakVel, lift) : null;
   const velColor = rpe ? rpeColor(rpe) : '#6366f1';
 
@@ -64,6 +65,9 @@ export default function HomeScreen() {
         <View style={s.statusRow}>
           <View style={[s.dot, {backgroundColor: STATUS_DOT[status]}]} />
           <Text style={s.statusTxt}>{STATUS_TEXT[status]}</Text>
+          {isConnected && (
+            <Text style={s.packetTxt}> · {packetCount} pkts</Text>
+          )}
         </View>
       </View>
 
@@ -159,6 +163,7 @@ const s = StyleSheet.create({
   statusRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
   dot: {width: 8, height: 8, borderRadius: 4},
   statusTxt: {color: '#888', fontSize: 13},
+  packetTxt: {color: '#6366f1', fontSize: 13},
 
   liftBar: {flexDirection: 'row', backgroundColor: '#181818', borderRadius: 12, padding: 4, marginBottom: 24},
   liftBtn: {flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center'},
