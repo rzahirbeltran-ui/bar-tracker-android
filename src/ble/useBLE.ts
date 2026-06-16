@@ -73,7 +73,14 @@ export function useBLE() {
               NUS_SERVICE_UUID,
               NUS_TX_CHAR_UUID,
               (err: Error | null, char: Characteristic | null) => {
-                if (err || !char?.value) return;
+                if (err) {
+                  // Desconexión abrupta (apagado del sensor)
+                  subRef.current = null;
+                  deviceRef.current = null;
+                  setStatus('idle');
+                  return;
+                }
+                if (!char?.value) return;
                 const newSamples = parsePacket(char.value);
                 setLastSample(newSamples[newSamples.length - 1]);
                 setSamples(prev => {
