@@ -4,7 +4,7 @@ import {
   SafeAreaView, StatusBar, Animated, Dimensions,
 } from 'react-native';
 import {useBLE, BLEStatus} from '../ble/useBLE';
-import {updateVelocity, resetVelocity} from '../utils/velocity';
+import {updateVelocity, resetVelocity, getCalibrationInfo} from '../utils/velocity';
 import {estimateRPE, rpeColor, rpeLabel, Lift} from '../utils/rpe';
 
 const {width} = Dimensions.get('window');
@@ -87,7 +87,7 @@ export default function HomeScreen() {
 
       {/* Main velocity display */}
       <View style={s.velBox}>
-        <Text style={s.velLabel}>VELOCIDAD PICO</Text>
+        <Text style={s.velLabel}>VELOCIDAD PICO · {getCalibrationInfo()}</Text>
         <Text style={[s.velNumber, {color: velColor}]}>
           {peakVel > 0 ? peakVel.toFixed(2) : '—'}
         </Text>
