@@ -9,11 +9,10 @@ import {
 import {parsePacket, IMUSample} from './parser';
 
 export type BLEStatus = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
-export let lastBLEError = '';   // diagnóstico — se puede leer desde la UI
+export let lastBLEError = '';
 
-// Manager a nivel de módulo — nunca se destruye, se reutiliza entre conexiones
+// Manager a nivel de módulo — nunca se destruye
 const manager = new BleManager();
-const MAX_SAMPLES = 500;
 
 async function requestAndroidPermissions(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
@@ -34,8 +33,7 @@ async function requestAndroidPermissions(): Promise<boolean> {
 async function readBatteryChar(dev: Device): Promise<number | null> {
   try {
     const char = await dev.readCharacteristicForService(
-      BATTERY_SERVICE_UUID,
-      BATTERY_CHAR_UUID,
+      BATTERY_SERVICE_UUID, BATTERY_CHAR_UUID,
     );
     if (char.value) return atob(char.value).charCodeAt(0);
   } catch {}
@@ -43,24 +41,23 @@ async function readBatteryChar(dev: Device): Promise<number | null> {
 }
 
 export function useBLE() {
-  const [status, setStatus]           = useState<BLEStatus>('idle');
-  const [samples, setSamples]         = useState<IMUSample[]>([]);
-  const [lastSample, setLastSample]   = useState<IMUSample | null>(null);
+  const [status, setStatus]             = useState<BLEStatus>('idle');
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
 
-  const deviceRef     = useRef<Device | null>(null);
-  const subRef        = useRef<{remove: () => void} | null>(null);
-  const batteryTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Callback que recibe cada muestra IMU — se llama directo sin pasar por setState
+  // HomeScreen lo asigna; corre fuera del ciclo de render de React
+  const onSampleRef = useRef<((s: IMUSample) => void) | null>(null);
 
-  const clearBatteryTimer = useCallback(() => {
-    if (batteryTimer.current) {
-      clearInterval(batteryTimer.current);
-      batteryTimer.current = null;
-    }
+  const deviceRef    = useRef<Device | null>(null);
+  const subRef       = useRef<{remove: () => void} | null>(null);
+  const battTimer    = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearBattTimer = useCallback(() => {
+    if (battTimer.current) { clearInterval(battTimer.current); battTimer.current = null; }
   }, []);
 
   const disconnect = useCallback(async () => {
-    clearBatteryTimer();
+    clearBattTimer();
     subRef.current?.remove();
     subRef.current = null;
     if (deviceRef.current) {
@@ -69,20 +66,26 @@ export function useBLE() {
     }
     setBatteryLevel(null);
     setStatus('idle');
-  }, [clearBatteryTimer]);
+  }, [clearBattTimer]);
 
   const connect = useCallback(async () => {
     try {
       const granted = await requestAndroidPermissions();
-      if (!granted) { lastBLEError = 'permisos denegados'; setStatus('error'); return; }
+      if (!granted) {
+        lastBLEError = 'permisos denegados';
+        setStatus('error');
+        return;
+      }
 
-      setStatus('scanning');
-      setSamples([]);
-      setLastSample(null);
       setBatteryLevel(null);
+      setStatus('scanning');
 
       manager.startDeviceScan(null, {allowDuplicates: false}, async (err, device) => {
-        if (err) { lastBLEError = `scan: ${err.message}`; setStatus('error'); return; }
+        if (err) {
+          lastBLEError = `scan: ${err.message}`;
+          setStatus('error');
+          return;
+        }
         if (!device) return;
         const name = device.localName ?? device.name;
         if (name !== DEVICE_NAME) return;
@@ -96,12 +99,11 @@ export function useBLE() {
           deviceRef.current = connected;
           setStatus('connected');
 
-          // Leer batería al conectar y cada 60 s
-          readBatteryChar(connected).then(pct => { if (pct !== null) setBatteryLevel(pct); });
-          batteryTimer.current = setInterval(async () => {
+          readBatteryChar(connected).then(p => { if (p !== null) setBatteryLevel(p); });
+          battTimer.current = setInterval(async () => {
             if (!deviceRef.current) return;
-            const pct = await readBatteryChar(deviceRef.current);
-            if (pct !== null) setBatteryLevel(pct);
+            const p = await readBatteryChar(deviceRef.current);
+            if (p !== null) setBatteryLevel(p);
           }, 60_000);
 
           subRef.current = connected.monitorCharacteristicForService(
@@ -109,7 +111,7 @@ export function useBLE() {
             NUS_TX_CHAR_UUID,
             (monErr: Error | null, char: Characteristic | null) => {
               if (monErr) {
-                clearBatteryTimer();
+                clearBattTimer();
                 subRef.current  = null;
                 deviceRef.current = null;
                 setBatteryLevel(null);
@@ -117,14 +119,9 @@ export function useBLE() {
                 return;
               }
               if (!char?.value) return;
-              const newSamples = parsePacket(char.value);
-              setLastSample(newSamples[newSamples.length - 1]);
-              setSamples(prev => {
-                const next = [...prev, ...newSamples];
-                return next.length > MAX_SAMPLES
-                  ? next.slice(next.length - MAX_SAMPLES)
-                  : next;
-              });
+              // ── Procesar muestras SIN pasar por setState → sin re-render
+              const samples = parsePacket(char.value);
+              samples.forEach(s => onSampleRef.current?.(s));
             },
           );
         } catch (e) {
@@ -136,16 +133,15 @@ export function useBLE() {
       lastBLEError = `outer: ${String(e)}`;
       setStatus('error');
     }
-  }, [clearBatteryTimer]);
+  }, [clearBattTimer]);
 
-  // Limpiar al desmontar el componente (sin destruir el manager)
   useEffect(() => {
     return () => {
-      clearBatteryTimer();
+      clearBattTimer();
       subRef.current?.remove();
       deviceRef.current?.cancelConnection().catch(() => {});
     };
-  }, [clearBatteryTimer]);
+  }, [clearBattTimer]);
 
-  return {status, samples, lastSample, batteryLevel, connect, disconnect};
+  return {status, batteryLevel, connect, disconnect, onSampleRef};
 }

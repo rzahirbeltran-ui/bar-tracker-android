@@ -40,45 +40,66 @@ function BatteryIcon({level}: {level: number | null}) {
 }
 
 export default function HomeScreen() {
-  const {status, samples, batteryLevel, connect, disconnect} = useBLE();
+  const {status, batteryLevel, connect, disconnect, onSampleRef} = useBLE();
   const {reps, feed, reset: resetReps} = useReps();
-  const [lift, setLift] = useState<Lift>('SQ');
+
+  const [lift, setLift]       = useState<Lift>('SQ');
   const [peakVel, setPeakVel] = useState(0);
   const barAnim = useRef(new Animated.Value(0)).current;
+
+  // Refs para estado intermedio — no causan re-renders
+  const liftRef    = useRef<Lift>('SQ');
+  const velRef     = useRef({peak: 0, signed: 0});
+  const isConnRef  = useRef(false);
 
   const isConnected = status === 'connected';
   const isBusy      = status === 'scanning' || status === 'connecting';
 
+  // Sincronizar liftRef con el estado (sin romper el closure del callback)
+  useEffect(() => { liftRef.current = lift; }, [lift]);
+  useEffect(() => { isConnRef.current = isConnected; }, [isConnected]);
+
+  // ── Callback BLE: corre a 200 Hz sin re-renders
+  // Se asigna directo al ref — siempre usa la versión más reciente de feed/liftRef
+  onSampleRef.current = (sample) => {
+    const {peak, signed} = updateVelocity([sample]);
+    velRef.current = {peak, signed};
+    const rpe = peak > 0.05 ? estimateRPE(peak, liftRef.current) : null;
+    feed(signed, liftRef.current, rpe);
+  };
+
+  // ── Timer de UI a 20 Hz — actualiza pantalla sin bloquear JS thread
   useEffect(() => {
-    if (samples.length === 0) return;
-    // Procesar solo la muestra más reciente (SAMPLES_PER_PACKET = 1)
-    const {peak, signed} = updateVelocity(samples.slice(-1));
-    setPeakVel(peak);
+    const timer = setInterval(() => {
+      if (!isConnRef.current) return;
+      const {peak} = velRef.current;
+      setPeakVel(peak);
+      Animated.timing(barAnim, {
+        toValue: Math.min(peak / 1.2, 1),
+        duration: 80,
+        useNativeDriver: false,
+      }).start();
+    }, 50);   // 20 Hz
+    return () => clearInterval(timer);
+  }, [barAnim]);
 
-    const rpe = peak > 0.05 ? estimateRPE(peak, lift) : null;
-    feed(signed, lift, rpe);
-
-    Animated.timing(barAnim, {
-      toValue: Math.min(peak / 1.2, 1),
-      duration: 150,
-      useNativeDriver: false,
-    }).start();
-  }, [samples, lift]);
+  // Limpiar al desconectar
+  useEffect(() => {
+    if (!isConnected) {
+      resetVelocity();
+      velRef.current = {peak: 0, signed: 0};
+      setPeakVel(0);
+      barAnim.setValue(0);
+    }
+  }, [isConnected, barAnim]);
 
   const handleReset = useCallback(() => {
     resetVelocity();
     resetReps();
+    velRef.current = {peak: 0, signed: 0};
     setPeakVel(0);
     barAnim.setValue(0);
-  }, [resetReps]);
-
-  useEffect(() => {
-    if (!isConnected) {
-      resetVelocity();
-      setPeakVel(0);
-      barAnim.setValue(0);
-    }
-  }, [isConnected]);
+  }, [resetReps, barAnim]);
 
   const rpe      = isConnected && peakVel > 0.05 ? estimateRPE(peakVel, lift) : null;
   const velColor = rpe ? rpeColor(rpe) : '#6366f1';
@@ -115,7 +136,7 @@ export default function HomeScreen() {
       <View style={s.velBox}>
         <Text style={s.velLabel}>VELOCIDAD PICO · {getCalibrationInfo()}</Text>
         <Text style={[s.velNumber, {color: velColor}]}>
-          {peakVel > 0 ? peakVel.toFixed(2) : '—'}
+          {peakVel > 0.01 ? peakVel.toFixed(2) : '—'}
         </Text>
         <Text style={s.velUnit}>m/s</Text>
         <View style={s.barTrack}>
@@ -249,7 +270,7 @@ const s = StyleSheet.create({
   rpePlaceholder: {color: '#444', fontSize: 15, paddingVertical: 6},
 
   repsBox:       {backgroundColor: '#111', borderRadius: 14, padding: 12,
-                  marginBottom: 10, maxHeight: 150},
+                  marginBottom: 10, maxHeight: 160},
   repsHeader:    {flexDirection: 'row', justifyContent: 'space-between',
                   alignItems: 'center', marginBottom: 8},
   repsTitle:     {color: '#fff', fontSize: 13, fontWeight: '700', letterSpacing: 1},

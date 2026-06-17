@@ -50,7 +50,7 @@ export function getCalibrationInfo() {
 
 export function updateVelocity(
   samples: IMUSample[],
-): {instant: number; peak: number; vertAccelG: number; isCalibrated: boolean} {
+): {instant: number; peak: number; signed: number; vertAccelG: number; isCalibrated: boolean} {
   for (const s of samples) {
     const accel: Vec3 = {x: s.ax, y: s.ay, z: s.az};
     const accelMag = Math.sqrt(accel.x ** 2 + accel.y ** 2 + accel.z ** 2);

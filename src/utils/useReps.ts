@@ -8,16 +8,18 @@ export interface Rep {
   rpe: number | null;
 }
 
-// Solo detecta la fase concéntrica (velocidad positiva = barra hacia arriba)
-const ENTER_V    = 0.18;  // m/s — umbral para iniciar un rep
-const EXIT_V     = 0.09;  // m/s — umbral para terminar (histéresis)
-const MIN_SAMPLES = 8;    // mínimo ~40 ms de movimiento para contar como rep
+// Umbrales bajos para detectar en ~20 ms desde el inicio del concéntrico
+const ENTER_V    = 0.06;  // m/s — velocidad positiva mínima para iniciar rep
+const EXIT_V     = 0.03;  // m/s — por debajo de esto termina el rep
+const MIN_SAMPLES = 4;    // ~20 ms @ 200 Hz
 
 export function useReps() {
   const [reps, setReps] = useState<Rep[]>([]);
   const nextId = useRef(1);
-  const st = useRef({active: false, peak: 0, count: 0});
+  const st     = useRef({active: false, peak: 0, count: 0});
 
+  // Llamado desde callback BLE (fuera del ciclo React) — seguro porque
+  // setReps es un setter estable de React 18
   const feed = useCallback((signedVelocity: number, lift: Lift, rpe: number | null) => {
     const s = st.current;
     if (!s.active) {
@@ -31,13 +33,7 @@ export function useReps() {
       s.count++;
       if (signedVelocity < EXIT_V) {
         if (s.count >= MIN_SAMPLES) {
-          const rep: Rep = {
-            id: nextId.current++,
-            lift,
-            velocity: s.peak,
-            rpe,
-          };
-          setReps(prev => [rep, ...prev]);
+          setReps(prev => [{id: nextId.current++, lift, velocity: s.peak, rpe}, ...prev]);
         }
         s.active = false;
         s.peak   = 0;
@@ -47,8 +43,8 @@ export function useReps() {
   }, []);
 
   const reset = useCallback(() => {
-    st.current       = {active: false, peak: 0, count: 0};
-    nextId.current   = 1;
+    st.current     = {active: false, peak: 0, count: 0};
+    nextId.current = 1;
     setReps([]);
   }, []);
 
