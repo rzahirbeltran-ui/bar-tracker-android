@@ -6,7 +6,6 @@ import {parsePacket, IMUSample} from './parser';
 
 export type BLEStatus = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
 
-const manager = new BleManager();
 const MAX_SAMPLES = 500;
 
 async function requestAndroidPermissions(): Promise<boolean> {
@@ -30,8 +29,18 @@ export function useBLE() {
   const [status, setStatus] = useState<BLEStatus>('idle');
   const [samples, setSamples] = useState<IMUSample[]>([]);
   const [lastSample, setLastSample] = useState<IMUSample | null>(null);
+
+  // Manager vive en un ref para evitar que destroy() lo mate entre renders
+  const managerRef = useRef<BleManager | null>(null);
   const deviceRef = useRef<Device | null>(null);
   const subRef = useRef<{remove: () => void} | null>(null);
+
+  function getManager(): BleManager {
+    if (!managerRef.current) {
+      managerRef.current = new BleManager();
+    }
+    return managerRef.current;
+  }
 
   const disconnect = useCallback(async () => {
     subRef.current?.remove();
@@ -52,13 +61,16 @@ export function useBLE() {
       setSamples([]);
       setLastSample(null);
 
+      const manager = getManager();
+
       manager.startDeviceScan(
         null,
         {allowDuplicates: false},
         async (error, device) => {
           if (error) { setStatus('error'); return; }
+          if (!device) return;
           const name = device.localName ?? device.name;
-          if (!device || name !== DEVICE_NAME) return;
+          if (name !== DEVICE_NAME) return;
 
           manager.stopDeviceScan();
           setStatus('connecting');
@@ -74,30 +86,45 @@ export function useBLE() {
               NUS_TX_CHAR_UUID,
               (err: Error | null, char: Characteristic | null) => {
                 if (err) {
-                  // Desconexión abrupta (apagado del sensor)
                   subRef.current = null;
                   deviceRef.current = null;
                   setStatus('idle');
                   return;
                 }
                 if (!char?.value) return;
-                const newSamples = parsePacket(char.value);
-                setLastSample(newSamples[newSamples.length - 1]);
-                setSamples(prev => {
-                  const next = [...prev, ...newSamples];
-                  return next.length > MAX_SAMPLES ? next.slice(next.length - MAX_SAMPLES) : next;
-                });
+                try {
+                  const newSamples = parsePacket(char.value);
+                  setLastSample(newSamples[newSamples.length - 1]);
+                  setSamples(prev => {
+                    const next = [...prev, ...newSamples];
+                    return next.length > MAX_SAMPLES
+                      ? next.slice(next.length - MAX_SAMPLES)
+                      : next;
+                  });
+                } catch {}
               },
             );
-          } catch { setStatus('error'); }
+          } catch (e) {
+            setStatus('error');
+          }
         },
       );
-    } catch { setStatus('error'); }
+    } catch (e) {
+      setStatus('error');
+    }
   }, []);
 
+  // Solo limpia conexión al desmontar, NO destruye el manager
   useEffect(() => {
-    return () => { disconnect(); manager.destroy(); };
-  }, [disconnect]);
+    return () => {
+      subRef.current?.remove();
+      subRef.current = null;
+      if (deviceRef.current) {
+        deviceRef.current.cancelConnection().catch(() => {});
+        deviceRef.current = null;
+      }
+    };
+  }, []);
 
   return {status, samples, lastSample, connect, disconnect};
 }
