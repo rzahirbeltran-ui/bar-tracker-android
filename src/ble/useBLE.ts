@@ -92,16 +92,14 @@ export function useBLE() {
                   return;
                 }
                 if (!char?.value) return;
-                try {
-                  const newSamples = parsePacket(char.value);
-                  setLastSample(newSamples[newSamples.length - 1]);
-                  setSamples(prev => {
-                    const next = [...prev, ...newSamples];
-                    return next.length > MAX_SAMPLES
-                      ? next.slice(next.length - MAX_SAMPLES)
-                      : next;
-                  });
-                } catch {}
+                const newSamples = parsePacket(char.value);
+                setLastSample(newSamples[newSamples.length - 1]);
+                setSamples(prev => {
+                  const next = [...prev, ...newSamples];
+                  return next.length > MAX_SAMPLES
+                    ? next.slice(next.length - MAX_SAMPLES)
+                    : next;
+                });
               },
             );
           } catch (e) {

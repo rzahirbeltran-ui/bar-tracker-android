@@ -6,19 +6,29 @@ export interface IMUSample {
   gx: number; gy: number; gz: number;
 }
 
+// Decode base64 → Uint8Array sin usar Buffer (Buffer es Node.js, no existe en React Native)
+function decodeBase64(base64: string): DataView {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new DataView(bytes.buffer);
+}
+
 export function parsePacket(base64: string): IMUSample[] {
-  const buf = Buffer.from(base64, 'base64');
+  const view = decodeBase64(base64);
   const samples: IMUSample[] = [];
   for (let i = 0; i < SAMPLES_PER_PACKET; i++) {
-    const offset = i * SAMPLE_BYTES;
+    const o = i * SAMPLE_BYTES;
     samples.push({
-      timestamp: buf.readUInt32BE(offset),
-      ax: buf.readInt16BE(offset + 4) * ACCEL_SCALE,
-      ay: buf.readInt16BE(offset + 6) * ACCEL_SCALE,
-      az: buf.readInt16BE(offset + 8) * ACCEL_SCALE,
-      gx: buf.readInt16BE(offset + 10) * GYRO_SCALE,
-      gy: buf.readInt16BE(offset + 12) * GYRO_SCALE,
-      gz: buf.readInt16BE(offset + 14) * GYRO_SCALE,
+      timestamp: view.getUint32(o,      false),               // big-endian
+      ax:        view.getInt16(o + 4,   false) * ACCEL_SCALE,
+      ay:        view.getInt16(o + 6,   false) * ACCEL_SCALE,
+      az:        view.getInt16(o + 8,   false) * ACCEL_SCALE,
+      gx:        view.getInt16(o + 10,  false) * GYRO_SCALE,
+      gy:        view.getInt16(o + 12,  false) * GYRO_SCALE,
+      gz:        view.getInt16(o + 14,  false) * GYRO_SCALE,
     });
   }
   return samples;
