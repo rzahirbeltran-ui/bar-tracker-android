@@ -9,6 +9,7 @@ import {
 import {parsePacket, IMUSample} from './parser';
 
 export type BLEStatus = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
+export let lastBLEError = '';   // diagnóstico — se puede leer desde la UI
 
 // Manager a nivel de módulo — nunca se destruye, se reutiliza entre conexiones
 const manager = new BleManager();
@@ -73,7 +74,7 @@ export function useBLE() {
   const connect = useCallback(async () => {
     try {
       const granted = await requestAndroidPermissions();
-      if (!granted) { setStatus('error'); return; }
+      if (!granted) { lastBLEError = 'permisos denegados'; setStatus('error'); return; }
 
       setStatus('scanning');
       setSamples([]);
@@ -81,7 +82,7 @@ export function useBLE() {
       setBatteryLevel(null);
 
       manager.startDeviceScan(null, {allowDuplicates: false}, async (err, device) => {
-        if (err) { setStatus('error'); return; }
+        if (err) { lastBLEError = `scan: ${err.message}`; setStatus('error'); return; }
         if (!device) return;
         const name = device.localName ?? device.name;
         if (name !== DEVICE_NAME) return;
@@ -126,11 +127,13 @@ export function useBLE() {
               });
             },
           );
-        } catch {
+        } catch (e) {
+          lastBLEError = `connect: ${String(e)}`;
           setStatus('error');
         }
       });
-    } catch {
+    } catch (e) {
+      lastBLEError = `outer: ${String(e)}`;
       setStatus('error');
     }
   }, [clearBatteryTimer]);

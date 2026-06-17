@@ -3,7 +3,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet,
   SafeAreaView, StatusBar, Animated, Dimensions, ScrollView,
 } from 'react-native';
-import {useBLE, BLEStatus} from '../ble/useBLE';
+import {useBLE, BLEStatus, lastBLEError} from '../ble/useBLE';
 import {updateVelocity, resetVelocity, getCalibrationInfo} from '../utils/velocity';
 import {estimateRPE, rpeColor, rpeLabel, Lift} from '../utils/rpe';
 import {useReps} from '../utils/useReps';
@@ -143,7 +143,9 @@ export default function HomeScreen() {
           </>
         ) : (
           <Text style={s.rpePlaceholder}>
-            {isConnected ? 'Inicia un levantamiento...' : 'Conecta el sensor'}
+            {status === 'error' && lastBLEError
+              ? lastBLEError
+              : isConnected ? 'Inicia un levantamiento...' : 'Conecta el sensor'}
           </Text>
         )}
       </View>
