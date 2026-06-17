@@ -1,11 +1,12 @@
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, StatusBar, Animated, Dimensions,
+  SafeAreaView, StatusBar, Animated, Dimensions, ScrollView,
 } from 'react-native';
 import {useBLE, BLEStatus} from '../ble/useBLE';
 import {updateVelocity, resetVelocity, getCalibrationInfo} from '../utils/velocity';
 import {estimateRPE, rpeColor, rpeLabel, Lift} from '../utils/rpe';
+import {useReps} from '../utils/useReps';
 
 const {width} = Dimensions.get('window');
 
@@ -24,35 +25,62 @@ const STATUS_TEXT: Record<BLEStatus, string> = {
   connected: 'Conectado', error: 'Error',
 };
 
+function BatteryIcon({level}: {level: number | null}) {
+  if (level === null) return null;
+  const color = level > 50 ? '#4ade80' : level > 20 ? '#facc15' : '#f87171';
+  return (
+    <View style={bat.wrap}>
+      <View style={bat.shell}>
+        <View style={[bat.fill, {width: `${level}%` as any, backgroundColor: color}]} />
+      </View>
+      <View style={bat.nub} />
+      <Text style={[bat.txt, {color}]}>{level}%</Text>
+    </View>
+  );
+}
+
 export default function HomeScreen() {
-  const {status, samples, connect, disconnect} = useBLE();
+  const {status, samples, batteryLevel, connect, disconnect} = useBLE();
+  const {reps, feed, reset: resetReps} = useReps();
   const [lift, setLift] = useState<Lift>('SQ');
   const [peakVel, setPeakVel] = useState(0);
-  const [instVel, setInstVel] = useState(0);
   const barAnim = useRef(new Animated.Value(0)).current;
 
   const isConnected = status === 'connected';
-  const isBusy = status === 'scanning' || status === 'connecting';
+  const isBusy      = status === 'scanning' || status === 'connecting';
 
   useEffect(() => {
     if (samples.length === 0) return;
-    const latest = samples.slice(-5);
-    const {instant, peak} = updateVelocity(latest);
-    setInstVel(instant);
+    // Procesar solo la muestra más reciente (SAMPLES_PER_PACKET = 1)
+    const {peak, signed} = updateVelocity(samples.slice(-1));
     setPeakVel(peak);
+
+    const rpe = peak > 0.05 ? estimateRPE(peak, lift) : null;
+    feed(signed, lift, rpe);
+
     Animated.timing(barAnim, {
       toValue: Math.min(peak / 1.2, 1),
       duration: 150,
       useNativeDriver: false,
     }).start();
-  }, [samples]);
+  }, [samples, lift]);
+
+  const handleReset = useCallback(() => {
+    resetVelocity();
+    resetReps();
+    setPeakVel(0);
+    barAnim.setValue(0);
+  }, [resetReps]);
 
   useEffect(() => {
-    if (!isConnected) { resetVelocity(); setPeakVel(0); setInstVel(0); }
+    if (!isConnected) {
+      resetVelocity();
+      setPeakVel(0);
+      barAnim.setValue(0);
+    }
   }, [isConnected]);
 
-  const packetCount = samples.length;
-  const rpe = isConnected && peakVel > 0.05 ? estimateRPE(peakVel, lift) : null;
+  const rpe      = isConnected && peakVel > 0.05 ? estimateRPE(peakVel, lift) : null;
   const velColor = rpe ? rpeColor(rpe) : '#6366f1';
 
   return (
@@ -62,12 +90,12 @@ export default function HomeScreen() {
       {/* Header */}
       <View style={s.header}>
         <Text style={s.appName}>BarTracker</Text>
-        <View style={s.statusRow}>
-          <View style={[s.dot, {backgroundColor: STATUS_DOT[status]}]} />
-          <Text style={s.statusTxt}>{STATUS_TEXT[status]}</Text>
-          {isConnected && (
-            <Text style={s.packetTxt}> · {packetCount} pkts</Text>
-          )}
+        <View style={s.headerRight}>
+          <BatteryIcon level={batteryLevel} />
+          <View style={s.statusRow}>
+            <View style={[s.dot, {backgroundColor: STATUS_DOT[status]}]} />
+            <Text style={s.statusTxt}>{STATUS_TEXT[status]}</Text>
+          </View>
         </View>
       </View>
 
@@ -78,32 +106,26 @@ export default function HomeScreen() {
             key={l.key}
             style={[s.liftBtn, lift === l.key && s.liftBtnActive]}
             onPress={() => setLift(l.key)}>
-            <Text style={[s.liftTxt, lift === l.key && s.liftTxtActive]}>
-              {l.label}
-            </Text>
+            <Text style={[s.liftTxt, lift === l.key && s.liftTxtActive]}>{l.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {/* Main velocity display */}
+      {/* Velocidad pico */}
       <View style={s.velBox}>
         <Text style={s.velLabel}>VELOCIDAD PICO · {getCalibrationInfo()}</Text>
         <Text style={[s.velNumber, {color: velColor}]}>
           {peakVel > 0 ? peakVel.toFixed(2) : '—'}
         </Text>
         <Text style={s.velUnit}>m/s</Text>
-
-        {/* Velocity bar */}
         <View style={s.barTrack}>
           <Animated.View
             style={[s.barFill, {
-              width: barAnim.interpolate({inputRange: [0, 1], outputRange: ['0%', '100%']}),
+              width: barAnim.interpolate({inputRange:[0,1], outputRange:['0%','100%']}),
               backgroundColor: velColor,
             }]}
           />
         </View>
-
-        {/* Speed zones */}
         <View style={s.zonesRow}>
           <Text style={s.zone}>Lento</Text>
           <Text style={s.zone}>Moderado</Text>
@@ -116,9 +138,7 @@ export default function HomeScreen() {
         {rpe ? (
           <>
             <Text style={s.rpeSmall}>RPE ESTIMADO</Text>
-            <Text style={[s.rpeNumber, {color: rpeColor(rpe)}]}>
-              {rpe.toFixed(1)}
-            </Text>
+            <Text style={[s.rpeNumber, {color: rpeColor(rpe)}]}>{rpe.toFixed(1)}</Text>
             <Text style={s.rpeDesc}>{rpeLabel(rpe)}</Text>
           </>
         ) : (
@@ -128,75 +148,128 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Raw data */}
-      {isConnected && samples.length > 0 && (() => {
-        const last = samples[samples.length - 1];
-        return (
-          <View style={s.rawBox}>
-            <Text style={s.rawRow}>
-              ax {last.ax.toFixed(3)}  ay {last.ay.toFixed(3)}  az {last.az.toFixed(3)} g
-            </Text>
-            <Text style={s.rawRow}>
-              gx {last.gx.toFixed(1)}  gy {last.gy.toFixed(1)}  gz {last.gz.toFixed(1)} °/s
-            </Text>
+      {/* Historial de reps */}
+      {reps.length > 0 && (
+        <View style={s.repsBox}>
+          <View style={s.repsHeader}>
+            <Text style={s.repsTitle}>{reps.length} REP{reps.length !== 1 ? 'S' : ''}</Text>
+            <TouchableOpacity onPress={handleReset} style={s.resetInlineBtn}>
+              <Text style={s.resetInlineTxt}>Reiniciar</Text>
+            </TouchableOpacity>
           </View>
-        );
-      })()}
+          <ScrollView style={s.repsList} showsVerticalScrollIndicator={false}>
+            {reps.map(rep => (
+              <View key={rep.id} style={s.repRow}>
+                <Text style={s.repNum}>#{rep.id}</Text>
+                <Text style={[s.repVel, {color: rep.rpe ? rpeColor(rep.rpe) : '#6366f1'}]}>
+                  {rep.velocity.toFixed(2)} m/s
+                </Text>
+                {rep.rpe != null && (
+                  <Text style={[s.repRpe, {color: rpeColor(rep.rpe)}]}>
+                    RPE {rep.rpe.toFixed(1)}
+                  </Text>
+                )}
+                <Text style={s.repLift}>{rep.lift}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
-      {/* Connect button */}
-      <TouchableOpacity
-        style={[s.btn, isBusy && s.btnBusy, isConnected && s.btnDisconnect]}
-        onPress={isConnected ? disconnect : connect}
-        disabled={isBusy}>
-        <Text style={s.btnTxt}>
-          {isConnected ? 'Desconectar' : isBusy ? 'Espera...' : 'Conectar'}
-        </Text>
-      </TouchableOpacity>
+      {/* Botones */}
+      <View style={s.btnRow}>
+        {isConnected && (
+          <TouchableOpacity style={s.btnReset} onPress={handleReset}>
+            <Text style={s.btnResetTxt}>Reiniciar</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={[
+            s.btn,
+            isBusy && s.btnBusy,
+            isConnected && s.btnDisconnect,
+            isConnected && {flex: 2},
+          ]}
+          onPress={isConnected ? disconnect : connect}
+          disabled={isBusy}>
+          <Text style={s.btnTxt}>
+            {isConnected ? 'Desconectar' : isBusy ? 'Espera...' : 'Conectar'}
+          </Text>
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
 
+const bat = StyleSheet.create({
+  wrap:  {flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 4},
+  shell: {width: 26, height: 13, borderWidth: 1.5, borderColor: '#555',
+          borderRadius: 3, overflow: 'hidden'},
+  fill:  {height: '100%', borderRadius: 2},
+  nub:   {width: 3, height: 6, backgroundColor: '#555', borderRadius: 1},
+  txt:   {fontSize: 11, fontWeight: '600'},
+});
+
 const s = StyleSheet.create({
   root: {flex: 1, backgroundColor: '#0a0a0a', paddingHorizontal: 20},
-  header: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, marginBottom: 16},
-  appName: {color: '#fff', fontSize: 22, fontWeight: '700', letterSpacing: 1},
-  statusRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
-  dot: {width: 8, height: 8, borderRadius: 4},
-  statusTxt: {color: '#888', fontSize: 13},
-  packetTxt: {color: '#6366f1', fontSize: 13},
 
-  liftBar: {flexDirection: 'row', backgroundColor: '#181818', borderRadius: 12, padding: 4, marginBottom: 24},
-  liftBtn: {flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center'},
+  header:      {flexDirection: 'row', justifyContent: 'space-between',
+                alignItems: 'center', marginTop: 12, marginBottom: 16},
+  appName:     {color: '#fff', fontSize: 22, fontWeight: '700', letterSpacing: 1},
+  headerRight: {flexDirection: 'row', alignItems: 'center'},
+  statusRow:   {flexDirection: 'row', alignItems: 'center', gap: 6},
+  dot:         {width: 8, height: 8, borderRadius: 4},
+  statusTxt:   {color: '#888', fontSize: 13},
+
+  liftBar:       {flexDirection: 'row', backgroundColor: '#181818',
+                  borderRadius: 12, padding: 4, marginBottom: 20},
+  liftBtn:       {flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: 'center'},
   liftBtnActive: {backgroundColor: '#6366f1'},
-  liftTxt: {color: '#555', fontWeight: '600', fontSize: 14},
+  liftTxt:       {color: '#555', fontWeight: '600', fontSize: 14},
   liftTxtActive: {color: '#fff'},
 
-  velBox: {alignItems: 'center', marginBottom: 20},
+  velBox:   {alignItems: 'center', marginBottom: 14},
   velLabel: {color: '#555', fontSize: 11, letterSpacing: 2, marginBottom: 4},
-  velNumber: {fontSize: 80, fontWeight: '800', lineHeight: 90},
-  velUnit: {color: '#555', fontSize: 16, marginTop: -4, marginBottom: 20},
-  barTrack: {width: width - 40, height: 8, backgroundColor: '#1e1e1e', borderRadius: 4, overflow: 'hidden'},
-  barFill: {height: '100%', borderRadius: 4},
-  zonesRow: {flexDirection: 'row', justifyContent: 'space-between', width: width - 40, marginTop: 6},
-  zone: {color: '#444', fontSize: 11},
+  velNumber:{fontSize: 80, fontWeight: '800', lineHeight: 90},
+  velUnit:  {color: '#555', fontSize: 16, marginTop: -4, marginBottom: 14},
+  barTrack: {width: width - 40, height: 8, backgroundColor: '#1e1e1e',
+             borderRadius: 4, overflow: 'hidden'},
+  barFill:  {height: '100%', borderRadius: 4},
+  zonesRow: {flexDirection: 'row', justifyContent: 'space-between',
+             width: width - 40, marginTop: 6},
+  zone:     {color: '#444', fontSize: 11},
 
-  rpeCard: {
-    borderWidth: 1, borderRadius: 16, padding: 20,
-    alignItems: 'center', marginBottom: 16, backgroundColor: '#111',
-  },
-  rpeSmall: {color: '#555', fontSize: 11, letterSpacing: 2, marginBottom: 4},
-  rpeNumber: {fontSize: 52, fontWeight: '800'},
-  rpeDesc: {color: '#888', fontSize: 14, marginTop: 4},
-  rpePlaceholder: {color: '#444', fontSize: 15, paddingVertical: 8},
+  rpeCard:        {borderWidth: 1, borderRadius: 16, padding: 18, alignItems: 'center',
+                   marginBottom: 10, backgroundColor: '#111'},
+  rpeSmall:       {color: '#555', fontSize: 11, letterSpacing: 2, marginBottom: 4},
+  rpeNumber:      {fontSize: 48, fontWeight: '800'},
+  rpeDesc:        {color: '#888', fontSize: 14, marginTop: 4},
+  rpePlaceholder: {color: '#444', fontSize: 15, paddingVertical: 6},
 
-  rawBox: {backgroundColor: '#111', borderRadius: 10, padding: 12, marginBottom: 16},
-  rawRow: {color: '#444', fontSize: 12, fontFamily: 'monospace', lineHeight: 20},
+  repsBox:       {backgroundColor: '#111', borderRadius: 14, padding: 12,
+                  marginBottom: 10, maxHeight: 150},
+  repsHeader:    {flexDirection: 'row', justifyContent: 'space-between',
+                  alignItems: 'center', marginBottom: 8},
+  repsTitle:     {color: '#fff', fontSize: 13, fontWeight: '700', letterSpacing: 1},
+  resetInlineBtn:{paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
+                  backgroundColor: '#222'},
+  resetInlineTxt:{color: '#888', fontSize: 12},
+  repsList:      {flexGrow: 0},
+  repRow:        {flexDirection: 'row', alignItems: 'center', paddingVertical: 5,
+                  borderBottomWidth: 1, borderBottomColor: '#1a1a1a', gap: 10},
+  repNum:        {color: '#555', fontSize: 12, width: 32},
+  repVel:        {fontSize: 14, fontWeight: '700', width: 68},
+  repRpe:        {fontSize: 13, fontWeight: '600', width: 60},
+  repLift:       {color: '#555', fontSize: 11},
 
-  btn: {
-    backgroundColor: '#6366f1', borderRadius: 14,
-    paddingVertical: 16, alignItems: 'center', marginBottom: 20,
-  },
-  btnBusy: {backgroundColor: '#333'},
-  btnDisconnect: {backgroundColor: '#1e1e1e', borderWidth: 1, borderColor: '#333'},
-  btnTxt: {color: '#fff', fontSize: 17, fontWeight: '700'},
+  btnRow:       {flexDirection: 'row', gap: 10, marginBottom: 20, marginTop: 'auto'},
+  btn:          {flex: 1, backgroundColor: '#6366f1', borderRadius: 14,
+                 paddingVertical: 16, alignItems: 'center'},
+  btnBusy:      {backgroundColor: '#333'},
+  btnDisconnect:{backgroundColor: '#1e1e1e', borderWidth: 1, borderColor: '#333'},
+  btnTxt:       {color: '#fff', fontSize: 17, fontWeight: '700'},
+  btnReset:     {flex: 1, backgroundColor: '#1e1e1e', borderRadius: 14,
+                 paddingVertical: 16, alignItems: 'center', borderWidth: 1,
+                 borderColor: '#333'},
+  btnResetTxt:  {color: '#888', fontSize: 15, fontWeight: '600'},
 });
