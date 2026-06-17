@@ -10,6 +10,8 @@ import {parsePacket, IMUSample} from './parser';
 
 export type BLEStatus = 'idle' | 'scanning' | 'connecting' | 'connected' | 'error';
 
+// Manager a nivel de módulo — nunca se destruye, se reutiliza entre conexiones
+const manager = new BleManager();
 const MAX_SAMPLES = 500;
 
 async function requestAndroidPermissions(): Promise<boolean> {
@@ -28,39 +30,36 @@ async function requestAndroidPermissions(): Promise<boolean> {
   return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
+async function readBatteryChar(dev: Device): Promise<number | null> {
+  try {
+    const char = await dev.readCharacteristicForService(
+      BATTERY_SERVICE_UUID,
+      BATTERY_CHAR_UUID,
+    );
+    if (char.value) return atob(char.value).charCodeAt(0);
+  } catch {}
+  return null;
+}
+
 export function useBLE() {
-  const [status, setStatus] = useState<BLEStatus>('idle');
-  const [samples, setSamples] = useState<IMUSample[]>([]);
-  const [lastSample, setLastSample] = useState<IMUSample | null>(null);
+  const [status, setStatus]           = useState<BLEStatus>('idle');
+  const [samples, setSamples]         = useState<IMUSample[]>([]);
+  const [lastSample, setLastSample]   = useState<IMUSample | null>(null);
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
 
-  const managerRef  = useRef<BleManager | null>(null);
-  const deviceRef   = useRef<Device | null>(null);
-  const subRef      = useRef<{remove: () => void} | null>(null);
-  const batteryTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const deviceRef     = useRef<Device | null>(null);
+  const subRef        = useRef<{remove: () => void} | null>(null);
+  const batteryTimer  = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  function getManager(): BleManager {
-    if (!managerRef.current) {
-      managerRef.current = new BleManager();
+  const clearBatteryTimer = useCallback(() => {
+    if (batteryTimer.current) {
+      clearInterval(batteryTimer.current);
+      batteryTimer.current = null;
     }
-    return managerRef.current;
-  }
-
-  async function readBattery(dev: Device) {
-    try {
-      const char = await dev.readCharacteristicForService(
-        BATTERY_SERVICE_UUID,
-        BATTERY_CHAR_UUID,
-      );
-      if (char.value) {
-        // 1 byte base64 → número 0-100
-        setBatteryLevel(atob(char.value).charCodeAt(0));
-      }
-    } catch {}
-  }
+  }, []);
 
   const disconnect = useCallback(async () => {
-    if (batteryTimer.current) { clearInterval(batteryTimer.current); batteryTimer.current = null; }
+    clearBatteryTimer();
     subRef.current?.remove();
     subRef.current = null;
     if (deviceRef.current) {
@@ -69,7 +68,7 @@ export function useBLE() {
     }
     setBatteryLevel(null);
     setStatus('idle');
-  }, []);
+  }, [clearBatteryTimer]);
 
   const connect = useCallback(async () => {
     try {
@@ -81,10 +80,8 @@ export function useBLE() {
       setLastSample(null);
       setBatteryLevel(null);
 
-      const manager = getManager();
-
-      manager.startDeviceScan(null, {allowDuplicates: false}, async (error, device) => {
-        if (error) { setStatus('error'); return; }
+      manager.startDeviceScan(null, {allowDuplicates: false}, async (err, device) => {
+        if (err) { setStatus('error'); return; }
         if (!device) return;
         const name = device.localName ?? device.name;
         if (name !== DEVICE_NAME) return;
@@ -99,16 +96,20 @@ export function useBLE() {
           setStatus('connected');
 
           // Leer batería al conectar y cada 60 s
-          readBattery(connected);
-          batteryTimer.current = setInterval(() => readBattery(connected), 60_000);
+          readBatteryChar(connected).then(pct => { if (pct !== null) setBatteryLevel(pct); });
+          batteryTimer.current = setInterval(async () => {
+            if (!deviceRef.current) return;
+            const pct = await readBatteryChar(deviceRef.current);
+            if (pct !== null) setBatteryLevel(pct);
+          }, 60_000);
 
           subRef.current = connected.monitorCharacteristicForService(
             NUS_SERVICE_UUID,
             NUS_TX_CHAR_UUID,
-            (err: Error | null, char: Characteristic | null) => {
-              if (err) {
-                if (batteryTimer.current) { clearInterval(batteryTimer.current); batteryTimer.current = null; }
-                subRef.current = null;
+            (monErr: Error | null, char: Characteristic | null) => {
+              if (monErr) {
+                clearBatteryTimer();
+                subRef.current  = null;
                 deviceRef.current = null;
                 setBatteryLevel(null);
                 setStatus('idle');
@@ -132,17 +133,16 @@ export function useBLE() {
     } catch {
       setStatus('error');
     }
-  }, []);
+  }, [clearBatteryTimer]);
 
+  // Limpiar al desmontar el componente (sin destruir el manager)
   useEffect(() => {
     return () => {
-      if (batteryTimer.current) clearInterval(batteryTimer.current);
+      clearBatteryTimer();
       subRef.current?.remove();
-      if (deviceRef.current) {
-        deviceRef.current.cancelConnection().catch(() => {});
-      }
+      deviceRef.current?.cancelConnection().catch(() => {});
     };
-  }, []);
+  }, [clearBatteryTimer]);
 
   return {status, samples, lastSample, batteryLevel, connect, disconnect};
 }
